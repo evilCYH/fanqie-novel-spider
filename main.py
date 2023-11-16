@@ -10,6 +10,7 @@ if __name__ == '__main__':
             "User-Agent": 'Mozilla/5.0 (Linux; Android 11; MI 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.181 Mobile Safari/537.36'
         }
     ]
+    # 在这里更改
     intro_url = 'https://fanqienovel.com/page/7130527328643320832?enter_from=search'
     info.get_novel_info(url = intro_url, headers = headers[0])
     content.create_epub(headers = headers[1], path = info.save_path)
