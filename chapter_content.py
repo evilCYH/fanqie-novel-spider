@@ -1,5 +1,9 @@
 import concurrent.futures
+import os
 import random
+import subprocess
+import sys
+
 import requests
 import pandas as pd
 import re
@@ -9,7 +13,17 @@ from tqdm import tqdm
 from chapter_info import make_random_headers
 from time import sleep
 
-def download_chapter(api, headers, index):
+
+def download(path, type):
+    if type == 'txt':
+        download_txt(path)
+    elif type == 'epub':
+        download_epub(path)
+    elif type == 'mobi':
+        download_mobi(path)
+
+
+def get_chapter(api, headers, index):
     try:
         response = requests.get(api, headers=headers)
         if response.status_code == 200:
@@ -19,10 +33,11 @@ def download_chapter(api, headers, index):
     except Exception as e:
         return index, None
 
-def create_epub(path):
+
+def download_epub(path):
     headers = make_random_headers()
     novel_name = re.search(r'download/(.*?)$', path).group(1)
-    print(novel_name)
+    # print(novel_name)
     epub_name = f'{path}/{novel_name}.epub'
     chapter_csv = f'{path}/chapter_data.csv'
     chapter_data = pd.read_csv(chapter_csv)
@@ -36,8 +51,8 @@ def create_epub(path):
     # 创建一个列表用于存储下载的章节内容
     chapters_content = [None] * len(chapter_data)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        future_to_api = {executor.submit(download_chapter, row['Api'], headers, index): (index, row) for index, row in
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as executor:
+        future_to_api = {executor.submit(get_chapter, row['Api'], headers, index): (index, row) for index, row in
                          chapter_data.iterrows()}
         for future in tqdm(concurrent.futures.as_completed(future_to_api), total=len(chapter_data),
                            desc="Downloading chapters"):
@@ -60,6 +75,8 @@ def create_epub(path):
                 chapter_content += line
 
             chapters_content[index] = (chapter_name, chapter_content, row['Title'])
+            rest_time = round(random.uniform(0.1, 0.4), 2)
+            sleep(rest_time)
 
     for index, chapter_data in enumerate(chapters_content):
         if chapter_data is not None:
@@ -68,7 +85,7 @@ def create_epub(path):
                                          content=chapter_content)
             book.add_item(epub_chapter)
             toc_items.append(epub.Link(f'chapter_{index + 1}.xhtml', chapter_title, f'chapter{index + 1}'))
-            print(f"{chapter_title} 已添加到epub")
+            # print(f"{chapter_title} 已添加到epub")
 
     book.toc = tuple(toc_items)
     book.add_item(epub.EpubNcx())
@@ -76,42 +93,88 @@ def create_epub(path):
     epub.write_epub(epub_name, book)
 
 
-def get_txt(headers, path):
-    novel_name = re.search(r'download\\(.*?)$', path).group(1)
-    chapter_txt = f'{path}\{novel_name}.txt'
-    chapter_csv = f'{path}\chapter_data.csv'
+def download_mobi(path):
+    novel_name = re.search(r'download/(.*?)$', path).group(1)
+    epub_name = f'{path}/{novel_name}.epub'
+    download_epub(path)
+    print("开始将epub转换为mobi")
+
+    # 构建命令
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    exe_path = os.path.join(base_path, "kindlegen.exe")
+    command = [
+        exe_path,
+        epub_name
+    ]
+
+    try:
+        result = subprocess.run(command, text=True, encoding='gbk', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("转换完毕")
+    except subprocess.CalledProcessError as e:
+        if result.returncode == 1:
+            print("转换完毕")
+        else:
+            print("转换失败", e)
+
+    os.remove(epub_name)
+    print("原始epub文件已删除")
+
+
+def download_txt(path):
+    headers = make_random_headers()
+    novel_name = re.search(r'download/(.*?)$', path).group(1)
+
+    txt_name = f'{path}/{novel_name}.txt'
+    chapter_csv = f'{path}/chapter_data.csv'
     chapter_data = pd.read_csv(chapter_csv)
-    for index, row in chapter_data.iterrows():
-        api_response = requests.get(row['Api'], headers=headers)
-        # 解析 api 响应为 json 数据
-        api_data = api_response.json()
-        content_html = api_data['data']['content']
 
-        soup = BeautifulSoup(content_html, 'html.parser')
+    # 创建一个列表用于存储下载的章节内容
+    chapters_content = [None] * len(chapter_data)
 
-        chapter_name = soup.find('header').text
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as executor:
+        future_to_api = {executor.submit(get_chapter, row['Api'], headers, index): (index, row) for index, row in
+                         chapter_data.iterrows()}
+        for future in tqdm(concurrent.futures.as_completed(future_to_api), total=len(chapter_data),
+                           desc="Downloading chapters"):
+            index, row = future_to_api[future]
+            _, api_data = future.result()
 
-        paragraphs = soup.find_all('p')
-        chapter_content = ''
-        # 遍历所有找到的 <p> 标签，并输出其文本内容
-        for paragraph in paragraphs:
-            line = '　　' + paragraph.text + '\n'
-            chapter_content += line
+            if not api_data or "data" not in api_data or "content" not in api_data["data"]:
+                tqdm.write(f"无法获取章节内容: {row['Title']}，跳过。")
+                continue
 
-        first_para = re.search(r'<p>(.*?)</p>', str(paragraphs[0])).group(1)
-        if first_para != '':
-            chapter_content = '　　\n' + chapter_content
+            content_html = api_data['data']['content']
+            soup = BeautifulSoup(content_html, 'html.parser')
 
-        with open(chapter_txt, 'a', encoding='utf-8') as file:
-            file.write(chapter_name + '\n')
-            file.write(chapter_content)
-            file.write('\n')
-            file.write('\n')
+            chapter_name = soup.find('header').text
+            chapter_name = chapter_name + '\n'
 
-        print(f"{row['Title']}  已经写入txt")
+            paragraphs = soup.find_all('p')
 
-        rest_time = round(random.uniform(0.3, 1), 2)
-        sleep(rest_time)
+            chapter_content = ''
+            # 遍历所有找到的 <p> 标签，并输出其文本内容
+            for paragraph in paragraphs:
+                line = '　　' + paragraph.text + '\n'
+                chapter_content += line
+
+            first_para = re.search(r'<p>(.*?)</p>', str(paragraphs[0])).group(1)
+            if first_para != '':
+                chapter_content = '　　\n' + chapter_content
+
+            chapters_content[index] = (chapter_name, chapter_content, row['Title'])
+            rest_time = round(random.uniform(0.1, 0.4), 2)
+            sleep(rest_time)
+
+    for index, chapter_data in enumerate(chapters_content):
+        if chapter_data is not None:
+            chapter_name, chapter_content, chapter_title = chapter_data
+            with open(txt_name, 'a', encoding='utf-8') as file:
+                file.write(chapter_name + '\n')
+                file.write(chapter_content)
+                file.write('\n')
+                file.write('\n')
+
+            # print(f"{chapter_title} 已经写入txt")
 
 # def create_epub(headers, path):
 #     novel_name = re.search(r'download\\(.*?)$', path).group(1)
@@ -247,3 +310,43 @@ def get_txt(headers, path):
 #     book.add_item(epub.EpubNcx())
 #     book.add_item(epub.EpubNav())
 #     epub.write_epub(epub_name, book)
+
+# def download_txt(path):
+#     headers = make_random_headers()
+#     novel_name = re.search(r'download/(.*?)$', path).group(1)
+#
+#     txt_name = f'{path}/{novel_name}.txt'
+#     chapter_csv = f'{path}/chapter_data.csv'
+#     chapter_data = pd.read_csv(chapter_csv)
+#
+#     for index, row in chapter_data.iterrows():
+#         api_response = requests.get(row['Api'], headers=headers)
+#         # 解析 api 响应为 json 数据
+#         api_data = api_response.json()
+#         content_html = api_data['data']['content']
+#
+#         soup = BeautifulSoup(content_html, 'html.parser')
+#
+#         chapter_name = soup.find('header').text
+#
+#         paragraphs = soup.find_all('p')
+#         chapter_content = ''
+#         # 遍历所有找到的 <p> 标签，并输出其文本内容
+#         for paragraph in paragraphs:
+#             line = '　　' + paragraph.text + '\n'
+#             chapter_content += line
+#
+#         first_para = re.search(r'<p>(.*?)</p>', str(paragraphs[0])).group(1)
+#         if first_para != '':
+#             chapter_content = '　　\n' + chapter_content
+#
+#         with open(txt_name, 'a', encoding='utf-8') as file:
+#             file.write(chapter_name + '\n')
+#             file.write(chapter_content)
+#             file.write('\n')
+#             file.write('\n')
+#
+#         print(f"{row['Title']} 已经写入txt")
+#
+#         rest_time = round(random.uniform(0.3, 1), 2)
+#         sleep(rest_time)

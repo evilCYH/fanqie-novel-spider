@@ -6,12 +6,12 @@ import os
 import csv
 import json
 from bs4 import BeautifulSoup
-from time import sleep
+
 
 def make_random_headers():
     # 获取打包后可执行文件的路径
     base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    file_path = os.path.join(base_path, "a.txt")
+    file_path = os.path.join(base_path, "user_agent.txt")
     with open(file_path, 'r') as file:
         user_agents = file.readlines()
     ua = random.choice(user_agents).strip()
@@ -29,6 +29,7 @@ def make_random_headers():
         'TE': 'trailers'
     }
     return header
+
 
 def get_novel_info(url):
     headers = make_random_headers()
